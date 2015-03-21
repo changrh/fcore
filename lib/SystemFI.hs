@@ -2,7 +2,7 @@
 {-# OPTIONS_GHC -Wall #-}
 {- |
 Module      :  SystemFI
-Description :  Abstract syntax and pretty printer for SystemFI.
+Description :  Abstract syntax and pretty printer for System
 Copyright   :  (c) 2014—2015 The F2J Project Developers (given in AUTHORS.txt)
 License     :  BSD3
 
@@ -28,6 +28,7 @@ module SystemFI
   , fsubstTE
   , fsubstEE
   , joinType
+  , subst
   , prettyType
   , prettyExpr
   ) where
@@ -204,6 +205,39 @@ joinType (RecordType (l,t))   = RecordType (l, joinType t)
 joinType (Datatype n ts ns)  = Datatype n (map joinType ts) ns
 joinType (ListOf t)       = ListOf (joinType t)
 
+
+subst :: (Src.ReaderId -> Index -> Type Index) -> [Type Index] -> Type Index
+subst g ts@((TVar n a):_)      = if const then g n a else TVar n a
+  where const = all (== a) . map (\x -> let TVar _ y = x in y) $ ts
+subst g ((JClass c):_)         = JClass c
+subst g ts@((Fun _ _):_)       = Fun (subst g ts1) (subst g ts2)
+  where (ts1, ts2) = unzip . map (\x -> let Fun t1 t2 = x in (t1, t2)) $ ts
+subst g ts@((Forall n _):_)    = Forall n (\z -> subst g $ ts' z)
+  where ts' z = concat . map (\x -> let Forall _ f = x in [f z, f (z + 1)]) $ ts
+subst g ts@((Product _):_)     = Product ts'
+  where
+    ts' = map (subst g) . transpose . map (\x -> let Product hs = x in hs) $ ts
+    transpose :: [[a]] -> [[a]]
+    transpose [] = []
+    transpose xs = (map head xs):(transpose . map tail $ xs)
+subst g ((Unit):_)             = Unit
+subst g ts@((And _ _):_)       = And (subst g ts1) (subst g ts2)
+  where (ts1, ts2) = unzip . map (\x -> let And t1 t2 = x in (t1, t2)) $ ts
+subst g ts@((RecordType (l, _)):_) = RecordType (l, t')
+  where t' = subst g . map (\x -> let RecordType (_, t) = x in t) $ ts
+subst g ts@((Datatype n _ ns):_) = Datatype n ts' ns
+  where
+    ts' = map (subst g) . transpose . map (\x -> let Datatype _ hs _ = x in hs) $ ts
+    transpose :: [[a]] -> [[a]]
+    transpose [] = []
+    transpose xs = (map head xs):(transpose . map tail $ xs)
+subst g ts@((ListOf _):_) = ListOf t'
+  where t' = subst g . map (\x -> let ListOf t = x in t) $ ts
+
+substTT :: Index -> Type Index -> Type Index -> Type Index
+substTT i x t = subst (\n a -> if a == i then x else TVar n a) [t]
+
+
 -- instance Show (Type Index) where
 --   show = show . pretty
 
@@ -372,3 +406,4 @@ prettyExpr' p (i,j) (Case e alts) =
               let n = length ns
                   ids = [j..j+n-1]
               in hsep (text (constrName c) : map prettyVar ids) <+> arrow <+> prettyExpr' p (i, j+n) (es ids)
+

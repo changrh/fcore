@@ -29,4 +29,4 @@ simplify :: FI.FExp -> Expr t e
 simplify = Impl.simplify
 
 simplify' :: FI.Expr t e -> Expr t e
-simplify' = Impl.dedeBruE 0 [] 0 [] . Impl.transExpr 0 0 . unsafeCoerce
+simplify' = dedeBruE 0 [] 0 [] . Impl.transExpr 0 0 . unsafeCoerce

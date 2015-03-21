@@ -27,6 +27,8 @@ module Core
   , fsubstTE
   , fsubstEE
   , joinType
+  , dedeBruT
+  , dedeBruE
   , tVar
   , Core.forall
   , var
@@ -184,6 +186,72 @@ joinType (Product ts)     = Product (map joinType ts)
 joinType  Unit            = Unit
 joinType (Datatype n ts ns)  = Datatype n (map joinType ts) ns
 joinType (ListOf t)       = ListOf (joinType t)
+
+
+dedeBruT :: Index -> [t] -> Type Index -> Type t
+dedeBruT _ as (TVar n i)         = TVar n (reverse as !! i)
+dedeBruT _ _  (JClass c)         = JClass c
+dedeBruT i as (Fun t1 t2)        = Fun (dedeBruT i as t1) (dedeBruT i as t2)
+dedeBruT i as (Forall n f)       = Forall n (\a -> dedeBruT (i + 1) (a:as) (f i))
+dedeBruT i as (Product ts)       = Product (map (dedeBruT i as) ts)
+dedeBruT i as (Datatype n ts ns) = Datatype n (map (dedeBruT i as) ts) ns
+dedeBruT i as (ListOf t)         = ListOf (dedeBruT i as t)
+dedeBruT i as  Unit              = Unit
+
+dedeBruE :: Index -> [t] -> Index -> [e] -> Expr Index Index -> Expr t e
+dedeBruE _ _  _ xs (Var n i)                      = Var n (reverse xs !! i)
+dedeBruE _ _  _ _  (Lit l)                        = Lit l
+dedeBruE i as j xs (Lam n t f)                    = Lam n
+                                                      (dedeBruT i as t)
+                                                      (\x -> dedeBruE i as (j + 1) (x:xs) (f j))
+dedeBruE i as j xs (Fix fn pn f t1 t)             = Fix fn pn
+                                                      (\x x1 -> dedeBruE i as (j + 2) (x1:x:xs) $ f j (j + 1))
+                                                      (dedeBruT i as t1)
+                                                      (dedeBruT i as t)
+dedeBruE i as j xs (Let n e f)                    = Let n
+                                                      (dedeBruE i as j xs e)
+                                                      (\x -> dedeBruE i as (j + 1) (x:xs) (f j))
+dedeBruE i as j xs (LetRec ns ts fs e)            = LetRec ns
+                                                      (map (dedeBruT i as) ts)
+                                                      (\xs' -> map (dedeBruE i as (j + n) ((reverse xs') ++ xs)) (fs [j..j + n - 1]))
+                                                      (\xs' -> dedeBruE i as (j + n) ((reverse xs') ++ xs) (e [j..j + n - 1]))
+                                                      where n = length ts
+dedeBruE i as j xs (BLam n f)                     = BLam n (\a -> dedeBruE (i + 1) (a:as) j xs (f i))
+dedeBruE i as j xs (App f x)                      = App
+                                                      (dedeBruE i as j xs f)
+                                                      (dedeBruE i as j xs x)
+dedeBruE i as j xs (TApp f a)                     = TApp
+                                                       (dedeBruE i as j xs f)
+                                                       (dedeBruT i as a)
+dedeBruE i as j xs (If p b1 b2)                   = If p' b1' b2' where [p',b1',b2'] = map (dedeBruE i as j xs) [p,b1,b2]
+dedeBruE i as j xs (PrimOp e1 op e2)              = PrimOp
+                                                      (dedeBruE i as j xs e1) op
+                                                      (dedeBruE i as j xs e2)
+dedeBruE i as j xs (Tuple es)                     = Tuple (map (dedeBruE i as j xs) es)
+dedeBruE i as j xs (Proj index e)                 = Proj index (dedeBruE i as j xs e)
+dedeBruE i as j xs (JNew c args)                  = JNew c (map (dedeBruE i as j xs) args)
+dedeBruE i as j xs (JMethod callee m args r)      = JMethod
+                                                      (fmap (dedeBruE i as j xs) callee) m
+                                                      (map (dedeBruE i as j xs) args) r
+dedeBruE i as j xs (JField callee f r)            = JField (fmap (dedeBruE i as j xs) callee) f r
+dedeBruE i as j xs (Seq es)                       = Seq (map (dedeBruE i as j xs) es)
+dedeBruE i as j xs (Constr (Constructor n ts) es) = Constr
+                                                      (Constructor n (map (dedeBruT i as) ts))
+                                                      (map (dedeBruE i as j xs) es)
+dedeBruE i as j xs (Case e alts)                  = Case (dedeBruE i as j xs e) (map dedeBruijnAlt alts)
+  where dedeBruijnAlt (ConstrAlt (Constructor name ts) names fe) =
+          ConstrAlt
+            (Constructor name (map (dedeBruT i as) ts)) names
+            (\xs' -> dedeBruE i as (j + n) ((reverse xs') ++ xs) (fe [j..j + n - 1])) where n = length ts - 1
+
+dedeBruE i as j xs (Data recflag databinds e)     = Data recflag (map dedeBruijnDatabind databinds) (dedeBruE i as j xs e)
+  where dedeBruijnConstr i' as' (Constructor name types) = Constructor name (map (dedeBruT i' as') types)
+        dedeBruijnDatabind (DataBind n ns ctrs)   = DataBind n ns (\a -> map (dedeBruijnConstr (length ns + i) (a++as)) $
+                                                                         (ctrs [i..length ns+i-1]) )
+
+dedeBruE i as j xs (PolyList es t)                = PolyList (map (dedeBruE i as j xs) es) (dedeBruT i as t)
+dedeBruE i as j xs (JProxyCall e t)               = JProxyCall (dedeBruE i as j xs e) (dedeBruT i as t)
+
 
 tVar :: t -> Type t
 tVar = TVar "_"
